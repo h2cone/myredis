@@ -7,10 +7,11 @@ async fn say_world() {
 
 #[tokio::main]
 async fn main() {
-    // returns a value representing the operation
+    // return value of an async fn is an anonymous type that implements the Future trait
     let say_world = say_world();
 
     println!("hello");
 
+    // thread may do other work while the operation processes in the background
     say_world.await;
 }

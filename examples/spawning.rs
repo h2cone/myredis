@@ -1,7 +1,9 @@
 // cargo run --example spawning
 // cargo run --example hello_tokio
 
-use mini_redis::{Connection, Frame};
+use std::collections::HashMap;
+
+use mini_redis::{Command, Connection, Frame};
 use tokio::net::{TcpListener, TcpStream};
 
 #[tokio::main]
@@ -26,7 +28,11 @@ async fn main() {
         match listener.accept().await {
             Ok((socket, addr)) => {
                 println!("Accepted connection from {:?}", addr);
-                process(socket).await;
+                // A new task is spawned for each inbound socket. The socket is
+                // moved to the new task and processed there.
+                tokio::spawn(async move {
+                    process(socket).await;
+                });
                 println!("Finished processing connection from {:?}", addr);
             }
             Err(e) => {
@@ -38,18 +44,34 @@ async fn main() {
 }
 
 async fn process(socket: TcpStream) {
+    // A hashmap is used to store data
+    let mut db = HashMap::new();
+
     let mut conn = Connection::new(socket);
-    match conn.read_frame().await {
-        Ok(frame) => {
-            println!("Got frame: {:?}", frame);
-            // Handle the frame (e.g., process a command)
-            let resp = Frame::Error("Unsupported command".to_string());
-            conn.write_frame(&resp)
-                .await
-                .expect("Failed to write frame");
+    while let Ok(frame) = conn.read_frame().await {
+        if let None = frame {
+            continue;
         }
-        Err(e) => {
-            println!("Failed to read frame: {}", e);
-        }
+        let resp = match Command::from_frame(frame.unwrap()) {
+            Ok(cmd) => match cmd {
+                Command::Set(cmd) => {
+                    let key = cmd.key().to_string();
+                    let value = cmd.value().to_vec();
+                    db.insert(key, value);
+                    Frame::Simple("OK".to_string())
+                }
+                Command::Get(cmd) => {
+                    let key = cmd.key().to_string();
+                    let value = db.get(&key).unwrap();
+                    Frame::Bulk(value.clone().into())
+                }
+                _ => panic!("unimplemented {:?}", cmd),
+            },
+            Err(e) => {
+                eprintln!("Error: {:?}", e);
+                Frame::Error(e.to_string())
+            }
+        };
+        conn.write_frame(&resp).await.unwrap();
     }
 }
